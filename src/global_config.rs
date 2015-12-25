@@ -41,7 +41,7 @@ impl GlobalConfig {
         return match self.get_setting("display", "monitors") {
             Some(x) => match x.parse::<u32>() {
                 Ok(x)  => Ok(x),
-                Err(x) => Err("Failed parsing monitor count"),
+                Err(_) => Err("Failed parsing monitor count"),
             },
             None    => Ok(1),
         };
