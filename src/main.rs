@@ -4,59 +4,109 @@ mod global_config;
 use std::path::PathBuf;
 use ini::Ini;
 use std::env;
+use std::fmt::{self, Display};
+use std::ascii::AsciiExt;
 use global_config::GlobalConfig;
 
-enum Type {
+struct ParserError {
+    file: String,
+    section: &'static str,
+    key: &'static str,
+}
+
+impl Display for ParserError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        return write!(f, "Error reading {} in {}:{}", self.file, self.section, self.key);
+    }
+}
+
+struct UnitLoader;
+
+impl UnitLoader {
+    fn read<'a>(parser: &'a Ini, section: &str, key: &str) -> Option<&'a String> {
+        return match parser.section(Some(section)) {
+            Some(x) => match x.get(key) {
+                Some(x) => Some(x),
+                None    => None,
+            },
+            None    => None,
+        }
+    }
+
+    fn parse_type(val: &str) -> ExecutionType {
+        if val.eq_ignore_ascii_case("running") {
+            return ExecutionType::Running;
+        }
+        return ExecutionType::Poll;
+    }
+
+    fn parse_exec(path: &str, parser: &Ini) -> Result<ExecuteDef, ParserError> {
+        return Ok(ExecuteDef::new(
+            match UnitLoader::read(&parser, "exec", "interval") {
+                Some(x) => x.parse::<u32>().unwrap(),
+                None    => return Err(ParserError { file: path.to_owned(), section: "exec", key: "interval" }),
+            },
+            match UnitLoader::read(&parser, "exec", "command") {
+                Some(x) => x.clone(),
+                None    => return Err(ParserError { file: path.to_owned(), section: "exec", key: "command" }),
+            },
+            match UnitLoader::read(&parser, "exec", "type") {
+                Some(x) => UnitLoader::parse_type(x),
+                None    => return Err(ParserError { file: path.to_owned(), section: "exec", key: "type" }),
+            }
+        ));
+    }
+
+    pub fn load(path: PathBuf) -> Result<UnitDef, ParserError> {
+        let path_str = path.to_str().unwrap();
+        let parser = Ini::load_from_file(path_str)
+                    .expect("Failed starting ini parser for file");
+        return Ok(UnitDef::new(
+            match UnitLoader::read(&parser, "unit", "name") {
+                Some(x) => x.clone(),
+                None    => return Err(ParserError { file: path_str.to_owned(), section: "unit", key: "name" }),
+            },
+            match UnitLoader::parse_exec(path_str, &parser) {
+                Ok(x)  => x,
+                Err(x) => return Err(x),
+            }
+        ))
+    }
+}
+
+enum ExecutionType {
     Poll,
     Running,
 }
 
-struct Unit {
-    name: String,
-    exec_type: Type,
-    command: Option<String>,
-    regex: Option<String>,
-    format: Option<String>,
-    interval: i32,
+struct ExecuteDef {
+    interval: u32,
+    command: String,
+    exec_type: ExecutionType,
 }
 
-impl Unit {
-    pub fn new() -> Unit {
-        return Unit {
-            name: "".to_owned(),
-            exec_type: Type::Poll,
-            command: None,
-            regex: None,
-            format: None,
-            interval: 0,
+impl ExecuteDef {
+    pub fn new(interval: u32, command: String, exec_type: ExecutionType) -> ExecuteDef {
+        return ExecuteDef {
+            interval: interval,
+            command: command,
+            exec_type: exec_type,
+        };
+    }
+}
+
+struct UnitDef {
+    name: String,
+    execute: ExecuteDef,
+}
+
+impl UnitDef {
+    pub fn new(name: String, exec: ExecuteDef) -> UnitDef {
+        return UnitDef {
+            name: name,
+            execute: exec,
         }
     }
-
-    pub fn load(path: &PathBuf) -> Result<Unit, String> {
-        let parser = Ini::load_from_file(path.to_str().expect("Invalid config path"))
-            .expect("Failed parsing unit config file");
-        return Ok(Unit {
-            name:
-                match parser.section(Some("unit")) {
-                    Some(x) => x.get("name").expect("No unit name found").clone(),
-                    None    => return Err(format!("Unit section not found in config file: {}", path.to_str().unwrap()))
-                },
-            exec_type: 
-                match parser.section(Some("unit")) {
-                    Some(x) => x.get("type"),
-                    None    => Type::Poll,
-                },
-            command: None,
-            regex: None,
-            format: None,
-            interval: 0,
-        });
-    }
-}
-
-fn load_unit(path : &PathBuf) -> Unit {
-    let unit = Unit::new();
-    return unit;
 }
 
 fn default_conf_dir<'a>() -> PathBuf {
