@@ -1,112 +1,70 @@
-extern crate ini;
-mod global_config;
+extern crate toml;
+extern crate rustc_serialize;
 
 use std::path::PathBuf;
-use ini::Ini;
 use std::env;
 use std::fmt::{self, Display};
+use std::error;
 use std::ascii::AsciiExt;
-use global_config::GlobalConfig;
 
-struct ParserError {
-    file: String,
-    section: &'static str,
-    key: &'static str,
-}
-
-impl Display for ParserError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        return write!(f, "Error reading {} in {}:{}", self.file, self.section, self.key);
-    }
-}
-
-struct UnitLoader;
-
-impl UnitLoader {
-    fn read<'a>(parser: &'a Ini, section: &str, key: &str) -> Option<&'a String> {
-        return match parser.section(Some(section)) {
-            Some(x) => match x.get(key) {
-                Some(x) => Some(x),
-                None    => None,
-            },
-            None    => None,
-        }
-    }
-
-    fn parse_type(val: &str) -> ExecutionType {
-        if val.eq_ignore_ascii_case("running") {
-            return ExecutionType::Running;
-        }
-        return ExecutionType::Poll;
-    }
-
-    fn parse_exec(path: &str, parser: &Ini) -> Result<ExecuteDef, ParserError> {
-        return Ok(ExecuteDef::new(
-            match UnitLoader::read(&parser, "exec", "interval") {
-                Some(x) => x.parse::<u32>().unwrap(),
-                None    => return Err(ParserError { file: path.to_owned(), section: "exec", key: "interval" }),
-            },
-            match UnitLoader::read(&parser, "exec", "command") {
-                Some(x) => x.clone(),
-                None    => return Err(ParserError { file: path.to_owned(), section: "exec", key: "command" }),
-            },
-            match UnitLoader::read(&parser, "exec", "type") {
-                Some(x) => UnitLoader::parse_type(x),
-                None    => return Err(ParserError { file: path.to_owned(), section: "exec", key: "type" }),
-            }
-        ));
-    }
-
-    pub fn load(path: PathBuf) -> Result<UnitDef, ParserError> {
-        let path_str = path.to_str().unwrap();
-        let parser = Ini::load_from_file(path_str)
-                    .expect("Failed starting ini parser for file");
-        return Ok(UnitDef::new(
-            match UnitLoader::read(&parser, "unit", "name") {
-                Some(x) => x.clone(),
-                None    => return Err(ParserError { file: path_str.to_owned(), section: "unit", key: "name" }),
-            },
-            match UnitLoader::parse_exec(path_str, &parser) {
-                Ok(x)  => x,
-                Err(x) => return Err(x),
-            }
-        ))
-    }
-}
-
+#[derive(Debug)]
 enum ExecutionType {
     Poll,
     Running,
 }
 
-struct ExecuteDef {
-    interval: u32,
-    command: String,
-    exec_type: ExecutionType,
-}
-
-impl ExecuteDef {
-    pub fn new(interval: u32, command: String, exec_type: ExecutionType) -> ExecuteDef {
-        return ExecuteDef {
-            interval: interval,
-            command: command,
-            exec_type: exec_type,
+impl Display for ExecutionType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            &ExecutionType::Poll => return write!(f, "Poll"),
+            &ExecutionType::Running => return write!(f, "Running"),
         };
     }
 }
 
-struct UnitDef {
-    name: String,
-    execute: ExecuteDef,
+impl rustc_serialize::Decodable for ExecutionType {
+    fn decode<D: rustc_serialize::Decoder>(d: &mut D) -> Result<ExecutionType, D::Error> {
+        match try!(d.read_str()).as_str() {
+            "Poll" => return Ok(ExecutionType::Poll),
+            "Running" => return Ok(ExecutionType::Running),
+            _ => return Err(d.error("String not a valid execution type")),
+        };
+    }
 }
 
-impl UnitDef {
-    pub fn new(name: String, exec: ExecuteDef) -> UnitDef {
-        return UnitDef {
-            name: name,
-            execute: exec,
-        }
+#[derive(RustcDecodable)]
+#[derive(Debug)]
+struct RunDef {
+    mode: ExecutionType,
+    script: String,
+}
+
+impl Display for RunDef {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        return write!(f, "Mode = ({}), Script = ({})", self.mode, self.script);
     }
+}
+
+#[derive(RustcDecodable)]
+#[derive(Debug)]
+struct MatchDef {
+   regex : String,
+}
+
+#[derive(RustcDecodable)]
+#[derive(Debug)]
+struct FormatDef {
+    string: Option<String>,
+    script: Option<String>,
+}
+
+#[derive(RustcDecodable)]
+#[derive(Debug)]
+struct Unit {
+    name: String,
+    run: RunDef,
+    format: FormatDef,
+    exp: MatchDef,
 }
 
 fn default_conf_dir<'a>() -> PathBuf {
@@ -125,7 +83,32 @@ fn main() {
     };
     println!("Conf dir {}", conf_path.to_str().unwrap());
 
-    let gconf = GlobalConfig::load_from_file(conf_path.clone());
-    println!("Sep: {}", gconf.background().unwrap());
+    //let gconf = GlobalConfig::load_from_file(conf_path.clone());
+    //println!("Sep: {}", gconf.background().unwrap());
+    let mut parser = toml::Parser::new(r##"
+    name="hello"
+    [run]
+    mode="Poll"
+    script="/home/delusional/aaa2"
+    [exp]
+    regex="(asd*)"
+    [format]
+    string="$1asd$1"
+    "##);
+    let toml = match parser.parse() {
+        Some(toml) => toml,
+        None       => {
+            for err in &parser.errors {
+                let (loline, locol) = parser.to_linecol(err.lo);
+                let (hiline, hicol) = parser.to_linecol(err.hi);
+                println!("{}:{}:{}-{}:{} error: {}",
+                         "aa", loline, locol, hiline, hicol, err.desc);
+            }
+            panic!();
+        }
+    };
+    let unit: Unit = toml::decode(toml::Value::Table(toml)).unwrap();
+    println!("{:?}", unit);
+    
     println!("Hello World");
 }
