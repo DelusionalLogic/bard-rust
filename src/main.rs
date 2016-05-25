@@ -1,11 +1,13 @@
 extern crate toml;
 extern crate rustc_serialize;
+extern crate getopts;
 
 use std::path::PathBuf;
 use std::env;
 use std::fmt::{self, Display};
-use std::error;
-use std::ascii::AsciiExt;
+use getopts::Options;
+use toml::Decoder;
+use rustc_serialize::Decodable;
 
 #[derive(Debug)]
 enum ExecutionType {
@@ -53,9 +55,21 @@ struct MatchDef {
 
 #[derive(RustcDecodable)]
 #[derive(Debug)]
-struct FormatDef {
-    string: Option<String>,
-    script: Option<String>,
+struct StringFormat {
+    string: String,
+}
+
+#[derive(RustcDecodable)]
+#[derive(Debug)]
+struct ScriptFormat {
+    script: String,
+}
+
+#[derive(RustcDecodable)]
+#[derive(Debug)]
+enum FormatDef {
+    StringFormat(StringFormat),
+    ScriptFormat(ScriptFormat),
 }
 
 #[derive(RustcDecodable)]
@@ -64,7 +78,7 @@ struct Unit {
     name: String,
     run: RunDef,
     format: FormatDef,
-    exp: MatchDef,
+    matching: MatchDef,
 }
 
 fn default_conf_dir<'a>() -> PathBuf {
@@ -74,10 +88,30 @@ fn default_conf_dir<'a>() -> PathBuf {
     return config_fallback_path;
 }
 
+fn print_usage(program: &str, opts: Options) {
+    let brief = format!("Usage {} [options]", program);
+    print!("{}", opts.usage(&brief));
+}
+
 fn main() {
-    let mut args = env::args();
-    args.next(); //Discard the first (it just has our cmd line)
-    let conf_path = match args.next() {
+    //Parse the arguments
+    let args: Vec<String> = env::args().collect();
+    let program = &args[0];
+
+    let mut opts = Options::new();
+    opts.optopt("c", "config", "Set configuration directory", "PATH");
+    opts.optflag("h", "help", "Print this help menu");
+    let matches =  match opts.parse(&args[1..]) {
+        Ok(m) => m,
+        Err(f) => panic!(f.to_string()),
+    };
+    if matches.opt_present("h") {
+        print_usage(&program, opts);
+        return;
+    }
+    //End of argument parsing
+
+    let conf_path = match matches.opt_str("c") {
         Some(x) => PathBuf::from(x),
         None    => default_conf_dir(),
     };
@@ -90,10 +124,10 @@ fn main() {
     [run]
     mode="Poll"
     script="/home/delusional/aaa2"
-    [exp]
+    [matching]
     regex="(asd*)"
     [format]
-    string="$1asd$1"
+    script="as"
     "##);
     let toml = match parser.parse() {
         Some(toml) => toml,
@@ -107,7 +141,11 @@ fn main() {
             panic!();
         }
     };
-    let unit: Unit = toml::decode(toml::Value::Table(toml)).unwrap();
+    let mut decoder = Decoder::new(toml::Value::Table(toml));
+    let unit: Unit = match Decodable::decode(&mut decoder) {
+        Ok(x) => x,
+        Err(err) => panic!("Error reading config: {}", err),
+    };
     println!("{:?}", unit);
     
     println!("Hello World");
